@@ -37,6 +37,8 @@ services:
       - "--providers.docker.watch=true"
       - "--providers.docker.exposedbydefault=false"
       - "--providers.docker.network=proxy-network"
+      - "--providers.file.directory=/config"
+      - "--providers.file.watch=true"
 
       # --- Entrypoints ---
       - "--entryPoints.web.address=:80"
@@ -85,19 +87,23 @@ services:
       - "traefik.http.routers.dashboard.tls.certresolver=letsencrypt"
 
       # Middleware de autenticação básica (usuário/senha via arquivo)
-      - "traefik.http.routers.dashboard.middlewares=dashboard-auth@docker"
       - "traefik.http.middlewares.dashboard-auth.basicauth.usersfile=/auth/dashboard_users"
       - "traefik.http.middlewares.dashboard-auth.basicauth.realm=Traefik Dashboard"
 
       # Middleware de segurança de headers
-      - "traefik.http.routers.dashboard.middlewares=dashboard-auth@docker,security-headers@docker"
+      - "traefik.http.routers.dashboard.middlewares=dashboard-auth@docker,security-headers@docker,dashboard-ratelimit@docker"
       - "traefik.http.middlewares.security-headers.headers.stsSeconds=31536000"
       - "traefik.http.middlewares.security-headers.headers.stsIncludeSubdomains=true"
       - "traefik.http.middlewares.security-headers.headers.stsPreload=true"
       - "traefik.http.middlewares.security-headers.headers.forceSTSHeader=true"
       - "traefik.http.middlewares.security-headers.headers.contentTypeNosniff=true"
-      - "traefik.http.middlewares.security-headers.headers.browserXssFilter=true"
+      - "traefik.http.middlewares.security-headers.headers.frameDeny=true"
       - "traefik.http.middlewares.security-headers.headers.referrerPolicy=strict-origin-when-cross-origin"
+      - "traefik.http.middlewares.security-headers.headers.permissionsPolicy=camera=(), microphone=(), geolocation=()"
+
+      # Middleware de rate limit (proteção brute force no dashboard)
+      - "traefik.http.middlewares.dashboard-ratelimit.ratelimit.average=10"
+      - "traefik.http.middlewares.dashboard-ratelimit.ratelimit.burst=20"
 
     # -------------------------------------------------------------------------
     # Portas expostas
@@ -116,6 +122,7 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock:ro   # leitura do Docker
       - ./traefik/acme:/acme                           # certificados Let's Encrypt
       - ./traefik/auth:/auth:ro                        # arquivo de usuários do dashboard
+      - ./traefik/config:/config:ro                    # configs dinâmicas (file provider)
 
     networks:
       - proxy-network
