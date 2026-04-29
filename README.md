@@ -1,5 +1,6 @@
 # Traefik v3 — Production Reverse Proxy
-
+👉[Artigo completo sobre o assunto.](https://fabriciopa.com.br/artigos/traefik-v3-docker-producao)
+<br><br>
 A production-ready [Traefik v3](https://traefik.io/) reverse proxy setup using Docker Compose. Handles automatic TLS via Let's Encrypt, HTTP→HTTPS redirection, and a secure dashboard with Basic Auth and security headers.
 
 ## What this is
