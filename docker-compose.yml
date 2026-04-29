@@ -1,0 +1,140 @@
+# =============================================================================
+# Traefik v3 - Configuração de PRODUÇÃO
+# =============================================================================
+# Pré-requisitos:
+#   1. Criar a rede externa:     docker network create proxy-network
+#   2. Criar o arquivo de senhas: echo $(htpasswd -nB admin) > ./traefik/auth/dashboard_users
+#   3. Criar o arquivo de certs: touch ./traefik/acme/acme.json && chmod 600 ./traefik/acme/acme.json
+#   4. Definir as variáveis de ambiente no arquivo .env (veja .env.example abaixo)
+#
+# Estrutura de arquivos esperada:                                                                                                                              #   ./traefik/
+#   ├── acme/
+#   │   └── acme.json          ← gerado automaticamente pelo Let's Encrypt
+#   ├── auth/
+#   │   └── dashboard_users    ← usuário:senha (htpasswd -nB admin)
+#   └── config/
+#       └── traefik.yml        ← config estática opcional (não obrigatório)
+# =============================================================================
+
+services:
+  traefik:
+    image: traefik:v3.6
+    container_name: traefik_proxy
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+
+    # -------------------------------------------------------------------------
+    # CLI - Configuração principal do Traefik
+    # -------------------------------------------------------------------------
+    command:
+      # --- API & Dashboard ---
+      - "--api.dashboard=true"
+      - "--api.insecure=false"               # dashboard só via roteador (HTTPS)
+
+      # --- Providers ---
+      - "--providers.docker=true"
+      - "--providers.docker.watch=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--providers.docker.network=proxy-network"
+
+      # --- Entrypoints ---
+      - "--entryPoints.web.address=:80"
+      - "--entryPoints.websecure.address=:443"
+
+      # Redireciona todo HTTP → HTTPS automaticamente
+      - "--entryPoints.web.http.redirections.entrypoint.to=websecure"
+      - "--entryPoints.web.http.redirections.entrypoint.scheme=https"
+      - "--entryPoints.web.http.redirections.entrypoint.permanent=true"
+
+      # --- TLS / Let's Encrypt (ACME) ---
+      - "--certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL}"
+      - "--certificatesresolvers.letsencrypt.acme.storage=/acme/acme.json"
+      - "--certificatesresolvers.letsencrypt.acme.httpchallenge=true"
+      - "--certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web"
+      # Descomente a linha abaixo para usar o servidor de staging do Let's Encrypt
+      # durante os testes (evita bater no rate limit de produção):
+      # - "--certificatesresolvers.letsencrypt.acme.caserver=https://acme-staging-v02.api.letsencrypt.org/directory"
+
+      # --- Segurança global TLS ---
+      - "--entryPoints.websecure.http.tls=true"
+      - "--entryPoints.websecure.http.tls.certresolver=letsencrypt"
+
+      # --- Logs ---
+      - "--log.level=INFO"                   # DEBUG | INFO | WARN | ERROR
+      - "--log.format=json"
+      - "--accesslog=true"
+      - "--accesslog.format=json"
+
+      # --- Health check interno ---
+      - "--ping=true"
+      - "--entryPoints.ping.address=:8082"
+      - "--ping.entrypoint=ping"
+
+    # -------------------------------------------------------------------------
+    # Labels - Roteamento do próprio dashboard
+    # -------------------------------------------------------------------------
+    labels:
+      - "traefik.enable=true"
+
+      # Roteador HTTPS para o dashboard
+      - "traefik.http.routers.dashboard.rule=Host(`${TRAEFIK_DASHBOARD_HOST}`)"
+      - "traefik.http.routers.dashboard.entrypoints=websecure"
+      - "traefik.http.routers.dashboard.service=api@internal"
+      - "traefik.http.routers.dashboard.tls=true"
+      - "traefik.http.routers.dashboard.tls.certresolver=letsencrypt"
+
+      # Middleware de autenticação básica (usuário/senha via arquivo)
+      - "traefik.http.routers.dashboard.middlewares=dashboard-auth@docker"
+      - "traefik.http.middlewares.dashboard-auth.basicauth.usersfile=/auth/dashboard_users"
+      - "traefik.http.middlewares.dashboard-auth.basicauth.realm=Traefik Dashboard"
+
+      # Middleware de segurança de headers
+      - "traefik.http.routers.dashboard.middlewares=dashboard-auth@docker,security-headers@docker"
+      - "traefik.http.middlewares.security-headers.headers.stsSeconds=31536000"
+      - "traefik.http.middlewares.security-headers.headers.stsIncludeSubdomains=true"
+      - "traefik.http.middlewares.security-headers.headers.stsPreload=true"
+      - "traefik.http.middlewares.security-headers.headers.forceSTSHeader=true"
+      - "traefik.http.middlewares.security-headers.headers.contentTypeNosniff=true"
+      - "traefik.http.middlewares.security-headers.headers.browserXssFilter=true"
+      - "traefik.http.middlewares.security-headers.headers.referrerPolicy=strict-origin-when-cross-origin"
+
+    # -------------------------------------------------------------------------
+    # Portas expostas
+    # -------------------------------------------------------------------------
+    ports:
+      - "0.0.0.0:80:80"       # IPv4 HTTP  (redireciona para HTTPS)
+      - "[::]:80:80"           # IPv6 HTTP  (redireciona para HTTPS)
+      - "0.0.0.0:443:443"      # IPv4 HTTPS
+      - "[::]:443:443"         # IPv6 HTTPS
+      # Porta 8080 REMOVIDA em produção — dashboard acessível apenas via HTTPS
+
+    # -------------------------------------------------------------------------
+    # Volumes
+    # -------------------------------------------------------------------------
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro   # leitura do Docker
+      - ./traefik/acme:/acme                           # certificados Let's Encrypt
+      - ./traefik/auth:/auth:ro                        # arquivo de usuários do dashboard
+
+    networks:
+      - proxy-network
+
+    # -------------------------------------------------------------------------
+    # Health check
+    # -------------------------------------------------------------------------
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "http://127.0.0.1:8082/ping"]
+      interval: 5m
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+# =============================================================================
+# Rede externa compartilhada com os outros serviços (nginx, etc.)
+# Criar com: docker network create proxy-network
+# =============================================================================
+networks:
+  proxy-network:
+    external: true
+
