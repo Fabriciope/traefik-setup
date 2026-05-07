@@ -132,7 +132,7 @@ services:
     # -------------------------------------------------------------------------
     healthcheck:
       test: ["CMD", "wget", "--spider", "http://127.0.0.1:8082/ping"]
-      interval: 5m
+      interval: 30s
       timeout: 10s
       retries: 3
       start_period: 15s
@@ -144,4 +144,3 @@ services:
 networks:
   proxy-network:
     external: true
-
