@@ -1,0 +1,77 @@
+# =============================================================================
+# Traefik v3 - Configuração de DESENVOLVIMENTO LOCAL
+# =============================================================================
+# Sem TLS, sem autenticação, sem rate limit — otimizado para dev local.
+#
+# Pré-requisito:
+#   docker network create proxy-network   (ou: bash setup-traefik-dev.sh)
+#
+# Dashboard acessível de duas formas:
+#   - http://localhost:8080/dashboard/    (sempre disponível, sem /etc/hosts)
+#   - http://traefik.local/dashboard/    (requer entrada no /etc/hosts:
+#                                          127.0.0.1 traefik.local)
+# =============================================================================
+
+services:
+  traefik:
+    image: traefik:v3.6
+    container_name: traefik_dev
+    restart: unless-stopped
+
+    # -------------------------------------------------------------------------
+    # CLI - Configuração do Traefik para desenvolvimento
+    # -------------------------------------------------------------------------
+    command:
+      # --- API & Dashboard ---
+      - "--api.dashboard=true"
+      - "--api.insecure=true"               # expõe a API diretamente na porta 8080
+
+      # --- Providers ---
+      - "--providers.docker=true"
+      - "--providers.docker.watch=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--providers.docker.network=proxy-network"
+
+      # --- Entrypoints ---
+      - "--entryPoints.web.address=:80"    # HTTP apenas (sem HTTPS em dev)
+
+      # --- Logs ---
+      - "--log.level=DEBUG"                # DEBUG | INFO | WARN | ERROR
+      - "--accesslog=true"
+
+    # -------------------------------------------------------------------------
+    # Labels - Dashboard acessível via traefik.local (porta 80)
+    # Requer no /etc/hosts: 127.0.0.1 traefik.local
+    # -------------------------------------------------------------------------
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.dashboard.rule=Host(`traefik.local`)"
+      - "traefik.http.routers.dashboard.service=api@internal"
+      - "traefik.http.routers.dashboard.entrypoints=web"
+      - "traefik.http.routers.dashboard.middlewares=redirect-to-dashboard@docker"
+      - "traefik.http.middlewares.redirect-to-dashboard.redirectregex.regex=^http://traefik\\.local/?$"
+      - "traefik.http.middlewares.redirect-to-dashboard.redirectregex.replacement=http://traefik.local/dashboard/"
+
+    # -------------------------------------------------------------------------
+    # Portas expostas
+    # -------------------------------------------------------------------------
+    ports:
+      - "80:80"       # HTTP — tráfego de entrada dos serviços
+      - "8080:8080"   # Dashboard direto (api.insecure=true)
+
+    # -------------------------------------------------------------------------
+    # Volumes
+    # -------------------------------------------------------------------------
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+
+    networks:
+      - proxy-network
+
+# =============================================================================
+# Rede externa compartilhada com os outros serviços
+# Criar com: docker network create proxy-network
+# =============================================================================
+networks:
+  proxy-network:
+    external: true
