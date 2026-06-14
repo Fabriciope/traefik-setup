@@ -1,18 +1,53 @@
-# Traefik v3 — Reverse Proxy (Production + Development)
-👉[Artigo completo sobre o assunto.](https://fabriciopa.com.br/artigos/traefik-v3-docker-producao)
-<br><br>
-A [Traefik v3](https://traefik.io/) reverse proxy setup using Docker Compose, with separate configurations for **production** (VPS with TLS) and **development** (local, HTTP only).
+# Traefik v3 — Reverse Proxy (Produção + Desenvolvimento)
 
-## Repository structure
+👉 [Artigo completo sobre o assunto.](https://fabriciopa.com.br/artigos/traefik-v3-docker-producao)
+
+Um setup de [Traefik v3](https://traefik.io/) com Docker Compose que serve como **porta de entrada única** para seus containers. Você sobe o Traefik **uma vez** e, a partir daí, qualquer outro projeto é exposto apenas adicionando _labels_ — sem mexer em portas, nginx ou certificados manualmente.
+
+O repositório traz dois ambientes prontos:
+
+- 🚀 **`development/`** — local, HTTP puro, sem senha, logs em modo debug.
+- 🔒 **`production/`** — VPS com domínio, TLS automático (Let's Encrypt), redirecionamento HTTP→HTTPS e dashboard protegido.
+
+```mermaid
+flowchart LR
+    Internet([Internet / Browser]) -->|:80 / :443| Traefik
+    subgraph proxy-network
+        Traefik[Traefik v3]
+        Traefik --> App1[app-1]
+        Traefik --> App2[app-2]
+        Traefik --> App3[dashboard]
+    end
+```
+
+Todos os serviços conversam pela mesma rede Docker (`proxy-network`). Basta o container ter o label `traefik.enable=true` e estar nessa rede para o Traefik descobri-lo automaticamente.
+
+---
+
+## Visão geral — Dev vs Produção
+
+| | 🚀 Development | 🔒 Production |
+|---|---|---|
+| **Quando usar** | Desenvolvimento local | VPS / servidor público |
+| **Protocolo** | HTTP (`:80`) | HTTPS (`:443`), com redirect de `:80` |
+| **TLS / Certificado** | Nenhum | Let's Encrypt automático |
+| **Autenticação** | Nenhuma | Basic Auth no dashboard |
+| **Dashboard** | `localhost:8080` (aberto) | Domínio próprio, atrás de auth |
+| **Domínio** | `*.localhost` (sem config) | Domínio real apontando pra VPS |
+| **Logs** | DEBUG (texto) | Padrão |
+
+---
+
+## Estrutura do repositório
 
 ```
 traefik/
-├── traefik.sh          # root script — manage either environment
-├── production/         # VPS setup: TLS, HTTPS, Basic Auth, security headers
+├── traefik.sh          # script raiz — gerencia os dois ambientes
+├── production/         # VPS: TLS, HTTPS, Basic Auth, security headers
 │   ├── docker-compose.yml
 │   ├── .env.example
 │   └── setup-traefik-prod.sh
-└── development/        # local dev: HTTP only, no auth, debug logs
+└── development/        # local: HTTP, sem auth, logs de debug
     ├── docker-compose.yml
     ├── .env.example
     └── setup-traefik-dev.sh
@@ -20,50 +55,43 @@ traefik/
 
 ---
 
-## Root script
+## O script `traefik.sh`
+
+Atalho para rodar `docker compose` no ambiente certo, de qualquer lugar do repositório:
 
 ```bash
-./traefik.sh <dev|prod> [docker compose command]
+./traefik.sh <dev|prod> [comando do docker compose]
 ```
 
-| Command | What it does |
+| Comando | O que faz |
 |---|---|
-| `./traefik.sh dev` | `docker compose up -d` in `development/` |
-| `./traefik.sh prod` | `docker compose up -d` in `production/` |
-| `./traefik.sh dev logs -f` | Follow logs in dev |
-| `./traefik.sh prod down` | Stop production |
-| `./traefik.sh dev restart` | Restart dev |
+| `./traefik.sh dev` | `docker compose up -d` em `development/` |
+| `./traefik.sh prod` | `docker compose up -d` em `production/` |
+| `./traefik.sh dev logs -f` | Acompanha os logs em dev |
+| `./traefik.sh prod restart` | Reinicia a produção |
+| `./traefik.sh prod down` | Para a produção |
 
 ---
 
-## Development environment
+## 🚀 Desenvolvimento
 
-Designed for local use — no domain, no certificates, no passwords required.
+Feito para uso local — **sem domínio, sem certificado, sem senha**. Comece por aqui.
 
 ### Quick start
 
 ```bash
-# 1. One-time setup (creates the Docker network)
+# 1. Setup único (cria a rede Docker proxy-network)
 bash development/setup-traefik-dev.sh
 
-# 2. Start
+# 2. Sobe o Traefik
 ./traefik.sh dev
 ```
 
-### Dashboard
+Dashboard disponível em **`http://localhost:8080/dashboard/`** — funciona de imediato, sem nenhuma configuração.
 
-| URL | How |
-|---|---|
-| `http://localhost:8080/dashboard/` | Always works, no setup needed |
-| `http://traefik.local/dashboard/` | Requires `/etc/hosts` entry (see below) |
+### Expondo um serviço
 
-**Optional — access via `traefik.local`:**
-
-```bash
-echo "127.0.0.1 traefik.local" | sudo tee -a /etc/hosts
-```
-
-### Exposing a service in development
+No `docker-compose.yml` do seu projeto, adicione os _labels_ e conecte-o à `proxy-network`:
 
 ```yaml
 services:
@@ -81,44 +109,73 @@ networks:
     external: true
 ```
 
-> `.localhost` domains resolve to `127.0.0.1` natively in most browsers and operating systems — no `/etc/hosts` changes needed.
+Pronto — acesse `http://myapp.localhost`. Domínios `.localhost` resolvem para `127.0.0.1` nativamente na maioria dos navegadores e sistemas, sem precisar editar `/etc/hosts` (mas é recomendado fazer essa configuração em `/etc/hosts`).
+
+<details>
+<summary><b>Meu container não escuta na porta 80</b></summary>
+
+Se o serviço escuta em outra porta (ex.: `3000`), informe ao Traefik com o label `loadbalancer.server.port`:
+
+```yaml
+labels:
+  - "traefik.enable=true"
+  - "traefik.http.routers.my-app.rule=Host(`myapp.localhost`)"
+  - "traefik.http.routers.my-app.entrypoints=web"
+  # container escuta na 3000 em vez da 80
+  - "traefik.http.services.my-app.loadbalancer.server.port=3000"
+```
+
+A porta é a **interna do container** — ela **não** precisa ser publicada com `ports:` no compose.
+</details>
+
+<details>
+<summary><b>Acessar o dashboard via <code>traefik.local</code></b></summary>
+
+Como alternativa ao `localhost:8080`, adicione uma entrada no `/etc/hosts`:
+
+```bash
+echo "127.0.0.1 traefik.local" | sudo tee -a /etc/hosts
+```
+
+Depois acesse `http://traefik.local/dashboard/`.
+</details>
 
 ---
 
-## Production environment
+## 🔒 Produção
 
-For a Linux VPS with a public domain. Handles automatic TLS via Let's Encrypt, HTTP→HTTPS redirection, and a secure dashboard behind Basic Auth.
+Para uma VPS Linux com domínio público. Cuida do TLS automático (Let's Encrypt), do redirecionamento HTTP→HTTPS e de um dashboard protegido por Basic Auth.
 
-### Prerequisites
+### Pré-requisitos
 
-- Docker and Docker Compose v2
-- A domain (or subdomain) pointing to your server's public IP
-- Ports `80` and `443` open in your firewall
-- `apache2-utils` (for `htpasswd`) — the setup script installs it if missing
+- Docker e Docker Compose v2
+- Um domínio (ou subdomínio) apontando para o IP público do servidor
+- Portas `80` e `443` liberadas no firewall
+- `apache2-utils` (para o `htpasswd`) — o script de setup instala se faltar
 
 ### Quick start
 
 ```bash
-# 1. Run the one-time setup (creates directories, acme.json, network, credentials)
+# 1. Setup único (cria diretórios, acme.json, rede e credenciais)
 bash production/setup-traefik-prod.sh
 
-# 2. Edit environment variables
+# 2. Edita as variáveis de ambiente
 nano production/.env
 
-# 3. Start
+# 3. Sobe o Traefik
 ./traefik.sh prod
 ```
 
-### Environment variables (`production/.env`)
+### Variáveis de ambiente (`production/.env`)
 
-| Variable | Description | Example |
+| Variável | Descrição | Exemplo |
 |---|---|---|
-| `ACME_EMAIL` | Email for Let's Encrypt notifications | `admin@example.com` |
-| `TRAEFIK_DASHBOARD_HOST` | Domain for the Traefik dashboard | `traefik.example.com` |
+| `ACME_EMAIL` | E-mail para avisos do Let's Encrypt | `admin@example.com` |
+| `TRAEFIK_DASHBOARD_HOST` | Domínio do dashboard do Traefik | `traefik.example.com` |
 
-Copy `production/.env.example` to `production/.env` and fill in your values. The `.env` file is git-ignored and must never be committed.
+Copie `production/.env.example` para `production/.env` e preencha. O `.env` é ignorado pelo git e **nunca** deve ser commitado.
 
-### Exposing a service in production
+### Expondo um serviço
 
 ```yaml
 services:
@@ -129,7 +186,7 @@ services:
       - "traefik.http.routers.my-app.rule=Host(`app.example.com`)"
       - "traefik.http.routers.my-app.entrypoints=websecure"
       - "traefik.http.routers.my-app.tls.certresolver=letsencrypt"
-      # Optional: shared security headers middleware
+      # opcional: aplica os security headers compartilhados
       - "traefik.http.routers.my-app.middlewares=security-headers@docker"
     networks:
       - proxy-network
@@ -139,66 +196,96 @@ networks:
     external: true
 ```
 
-### Available shared middlewares (production)
+<details>
+<summary><b>Middlewares compartilhados disponíveis</b></summary>
 
-| Middleware | Effect |
+| Middleware | Efeito |
 |---|---|
-| `security-headers@docker` | HSTS, frame deny, content-type nosniff, referrer-policy |
-| `dashboard-auth@docker` | Basic Auth (dashboard only) |
-| `dashboard-ratelimit@docker` | Rate limit: 10 req/s average, burst 20 (dashboard only) |
+| `security-headers@docker` | HSTS, frame deny, nosniff, referrer-policy |
+| `dashboard-auth@docker` | Basic Auth (apenas dashboard) |
+| `dashboard-ratelimit@docker` | Rate limit: 10 req/s em média, burst 20 (apenas dashboard) |
+</details>
 
-### Testing TLS before going live
+<details>
+<summary><b>Testar TLS sem estourar o rate limit (staging)</b></summary>
 
-Let's Encrypt has a [rate limit](https://letsencrypt.org/docs/rate-limits/) of 5 duplicate certificates per week. Use the staging CA during tests:
+O Let's Encrypt tem um [limite](https://letsencrypt.org/docs/rate-limits/) de 5 certificados duplicados por semana. Use a CA de staging durante os testes:
 
-1. Uncomment the staging line in `production/docker-compose.yml`:
+1. Descomente a linha de staging em `production/docker-compose.yml`:
    ```
    - "--certificatesresolvers.letsencrypt.acme.caserver=https://acme-staging-v02.api.letsencrypt.org/directory"
    ```
-2. Clear `production/traefik/acme/acme.json` and restart
-3. Verify the certificate is issued (it will be untrusted — expected in staging)
-4. Re-comment the line, clear `acme.json` again, restart to get a real certificate
+2. Esvazie `production/traefik/acme/acme.json` e reinicie
+3. Verifique que o certificado foi emitido (será não confiável — esperado em staging)
+4. Comente a linha de novo, esvazie o `acme.json` outra vez e reinicie para obter o certificado real
+</details>
 
-### Common operations
+<details>
+<summary><b>Operações comuns e health check</b></summary>
 
 ```bash
 ./traefik.sh prod logs -f traefik
 ./traefik.sh prod restart
 ./traefik.sh prod down
 
-# Health check (production)
+# Health check (produção)
 curl -s http://127.0.0.1:8082/ping
 ```
+</details>
 
 ---
 
-## Troubleshooting
+## ❓ Troubleshooting
 
-**Certificate not being issued (production)**
-- Confirm the domain's DNS A record points to this server's IP
-- Ensure port 80 is reachable from the internet (HTTP challenge requires it)
-- Check logs: `./traefik.sh prod logs -f traefik | grep -i acme`
+<details>
+<summary><b>Certificado não é emitido (produção)</b></summary>
 
-**Dashboard not loading (production)**
-- Verify `TRAEFIK_DASHBOARD_HOST` in `production/.env` matches the domain you're accessing
-- Confirm DNS: `dig +short your-domain.com`
+- Confirme que o registro DNS A do domínio aponta para o IP deste servidor
+- Garanta que a porta 80 está acessível pela internet (o desafio HTTP exige isso)
+- Veja os logs: `./traefik.sh prod logs -f traefik | grep -i acme`
+</details>
 
-**Service not picked up by Traefik**
-- Check the service is connected to `proxy-network`
-- Confirm `traefik.enable=true` label is set
-- Check logs: `./traefik.sh dev logs traefik`
+<details>
+<summary><b>Dashboard não carrega (produção)</b></summary>
 
-**acme.json permission error (production)**
-- The file must have mode `600`: `chmod 600 production/traefik/acme/acme.json`
+- Verifique se `TRAEFIK_DASHBOARD_HOST` no `production/.env` bate com o domínio acessado
+- Confirme o DNS: `dig +short seu-dominio.com`
+</details>
 
-## Security notes (production)
+<details>
+<summary><b>Serviço não é detectado pelo Traefik</b></summary>
 
-- Docker socket is mounted **read-only** (`/var/run/docker.sock:ro`)
-- `no-new-privileges: true` is set on the container
-- Dashboard is not accessible over plain HTTP and not exposed on port 8080
-- Dashboard credentials use bcrypt (cost factor 12) via `htpasswd -B`
-- The internal ping port (8082) is not bound to any public interface
+- Confirme que o serviço está conectado à `proxy-network`
+- Verifique se o label `traefik.enable=true` está presente
+- Veja os logs: `./traefik.sh dev logs traefik`
+</details>
 
-## License
+<details>
+<summary><b>Erro de permissão no acme.json (produção)</b></summary>
+
+O arquivo precisa estar com modo `600`:
+
+```bash
+chmod 600 production/traefik/acme/acme.json
+```
+</details>
+
+---
+
+## 🛡️ Notas de segurança (produção)
+
+<details>
+<summary><b>Expandir</b></summary>
+
+- O socket do Docker é montado **somente leitura** (`/var/run/docker.sock:ro`)
+- `no-new-privileges: true` está definido no container
+- O dashboard não é acessível por HTTP puro nem exposto na porta 8080
+- As credenciais do dashboard usam bcrypt (fator de custo 12) via `htpasswd -B`
+- A porta interna de ping (8082) não fica vinculada a nenhuma interface pública
+</details>
+
+---
+
+## Licença
 
 MIT
