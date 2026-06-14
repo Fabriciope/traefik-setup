@@ -25,8 +25,8 @@ if [ -z "$ENV" ]; then
 fi
 
 case "$ENV" in
-  dev|development)   DIR="development" ;;
-  prod|production)   DIR="production" ;;
+  dev|development)   DIR="development"; PROJECT="traefik-dev" ;;
+  prod|production)   DIR="production";  PROJECT="traefik-prod" ;;
   *)
     echo "Erro: ambiente desconhecido '$ENV'. Use 'dev' ou 'prod'." >&2
     exit 1
@@ -37,7 +37,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR/$DIR"
 
 if [ $# -le 1 ]; then
-  exec docker compose up -d
+  exec docker compose --project-name "$PROJECT" up -d
 else
-  exec docker compose "${@:2}"
+  exec docker compose --project-name "$PROJECT" "${@:2}"
 fi
