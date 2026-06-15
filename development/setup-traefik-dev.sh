@@ -6,6 +6,31 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Verificação de pré-requisitos antes de executar qualquer coisa
+echo "🔍 Verificando pré-requisitos..."
+
+MISSING=0
+
+if [ ! -f "$SCRIPT_DIR/docker-compose.yml" ]; then
+  echo "   ❌ docker-compose.yml não encontrado em $SCRIPT_DIR"
+  MISSING=1
+fi
+
+if ! command -v docker &> /dev/null; then
+  echo "   ❌ docker não está instalado"
+  MISSING=1
+fi
+
+if [ "$MISSING" -eq 1 ]; then
+  echo ""
+  echo "Corrija os problemas acima e execute novamente."
+  exit 1
+fi
+
+echo "   ✅ Tudo certo."
+echo ""
 echo "🛠️  Configurando ambiente Traefik para desenvolvimento..."
 
 # Criar rede Docker externa (ignora erro se já existir)
@@ -16,7 +41,7 @@ echo ""
 echo "✅ Setup concluído! Próximos passos:"
 echo ""
 echo "   1. Suba o Traefik:"
-echo "      docker compose up -d"
+echo "      docker compose up -d  (dentro de $SCRIPT_DIR)"
 echo "      ou: ./traefik.sh dev  (na raiz do projeto)"
 echo ""
 echo "   2. Acesse o dashboard:"

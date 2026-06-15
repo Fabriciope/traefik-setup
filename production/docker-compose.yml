@@ -90,16 +90,22 @@ services:
       - "traefik.http.middlewares.dashboard-auth.basicauth.usersfile=/auth/dashboard_users"
       - "traefik.http.middlewares.dashboard-auth.basicauth.realm=Traefik Dashboard"
 
-      # Middleware de segurança de headers
-      - "traefik.http.routers.dashboard.middlewares=dashboard-auth@docker,security-headers@docker,dashboard-ratelimit@docker"
-      - "traefik.http.middlewares.security-headers.headers.stsSeconds=31536000"
-      - "traefik.http.middlewares.security-headers.headers.stsIncludeSubdomains=true"
-      - "traefik.http.middlewares.security-headers.headers.stsPreload=true"
-      - "traefik.http.middlewares.security-headers.headers.forceSTSHeader=true"
-      - "traefik.http.middlewares.security-headers.headers.contentTypeNosniff=true"
-      - "traefik.http.middlewares.security-headers.headers.frameDeny=true"
-      - "traefik.http.middlewares.security-headers.headers.referrerPolicy=strict-origin-when-cross-origin"
-      - "traefik.http.middlewares.security-headers.headers.permissionsPolicy=camera=(), microphone=(), geolocation=()"
+      # Middleware de segurança de headers — usado pelo dashboard e disponível como
+      # referência de configuração. Outros serviços na rede devem definir seu próprio
+      # middleware com nome único (ex: "meu-servico-security-headers") nos próprios
+      # labels, copiando estas mesmas diretivas. Não reutilize "dashboard-security-headers"
+      # de fora deste projeto: middlewares definidos via Docker labels são resolvidos
+      # por nome global no provider, e compartilhar o mesmo nome entre containers de
+      # projetos distintos causa conflito se a ordem de inicialização não for garantida.
+      - "traefik.http.routers.dashboard.middlewares=dashboard-auth@docker,dashboard-security-headers@docker,dashboard-ratelimit@docker"
+      - "traefik.http.middlewares.dashboard-security-headers.headers.stsSeconds=31536000"
+      - "traefik.http.middlewares.dashboard-security-headers.headers.stsIncludeSubdomains=true"
+      - "traefik.http.middlewares.dashboard-security-headers.headers.stsPreload=true"
+      - "traefik.http.middlewares.dashboard-security-headers.headers.forceSTSHeader=true"
+      - "traefik.http.middlewares.dashboard-security-headers.headers.contentTypeNosniff=true"
+      - "traefik.http.middlewares.dashboard-security-headers.headers.frameDeny=true"
+      - "traefik.http.middlewares.dashboard-security-headers.headers.referrerPolicy=strict-origin-when-cross-origin"
+      - "traefik.http.middlewares.dashboard-security-headers.headers.permissionsPolicy=camera=(), microphone=(), geolocation=()"
 
       # Middleware de rate limit (proteção brute force no dashboard)
       - "traefik.http.middlewares.dashboard-ratelimit.ratelimit.average=10"
