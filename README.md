@@ -233,14 +233,43 @@ O Let's Encrypt tem um [limite](https://letsencrypt.org/docs/rate-limits/) de 5 
 <details>
 <summary><b>Backup dos certificados (acme.json)</b></summary>
 
-O `acme.json` guarda os certificados e as chaves privadas. Perdê-lo força a reemissão de tudo — e pode esbarrar no rate limit. O script `production/backup-acme.sh` mantém 7 cópias rotativas (uma por dia da semana) em `production/backups/`, com modo `600`.
+O `acme.json` guarda os certificados **e as chaves privadas** emitidos pelo Let's Encrypt. Perdê-lo força a reemissão de tudo — e pode esbarrar no rate limit (5 certificados duplicados por semana).
 
-Agende no cron do servidor:
+**Como funciona:** `production/backup-acme.sh` copia o `acme.json` para `acme.json.<dia-da-semana>` (1 = segunda … 7 = domingo), mantendo **7 cópias rotativas** — cada dia sobrescreve a cópia da semana anterior. As cópias preservam o modo `600` e o destino (`production/backups/` por padrão) é ignorado pelo git.
+
+**Rodar manualmente** (ex.: antes de mexer na config de TLS):
 
 ```bash
-# todo dia às 3h
+bash production/backup-acme.sh                # → production/backups/
+bash production/backup-acme.sh /outro/destino # destino customizado
+```
+
+**Agendar no cron do servidor** (o jeito recomendado — configure uma vez e esqueça):
+
+```bash
+crontab -e
+
+# todo dia às 3h da manhã
 0 3 * * * /bin/bash /caminho/para/production/backup-acme.sh
 ```
+
+**Verificar se está rodando:**
+
+```bash
+ls -la production/backups/
+# deve listar acme.json.1 … acme.json.7 com datas recentes e modo -rw-------
+```
+
+**Restaurar um backup** (acme.json corrompido/perdido):
+
+```bash
+./traefik.sh prod down
+cp production/backups/acme.json.<dia> production/traefik/acme/acme.json
+chmod 600 production/traefik/acme/acme.json
+./traefik.sh prod
+```
+
+> ⚠️ As cópias ficam **no mesmo disco** do servidor — protegem contra deleção acidental e corrupção, não contra perda da VPS. Para cobrir esse caso, sincronize `production/backups/` para fora da máquina (rsync, restic, object storage). Trate as cópias como segredo: contêm as chaves privadas dos certificados.
 </details>
 
 <details>
