@@ -17,6 +17,8 @@ services:
     image: traefik:v3.6
     container_name: traefik_dev
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
 
     # -------------------------------------------------------------------------
     # CLI - Configuração do Traefik para desenvolvimento
@@ -44,20 +46,27 @@ services:
     # Requer no /etc/hosts: 127.0.0.1 traefik.local
     # -------------------------------------------------------------------------
     labels:
+      # Nomes sufixados com "-dev": routers/middlewares do provider docker são
+      # resolvidos por nome global — se este container e o de produção fossem
+      # vistos pelo mesmo daemon, um router "dashboard" duplicado geraria
+      # conflito. O sufixo elimina a colisão.
       - "traefik.enable=true"
-      - "traefik.http.routers.dashboard.rule=Host(`traefik.local`)"
-      - "traefik.http.routers.dashboard.service=api@internal"
-      - "traefik.http.routers.dashboard.entrypoints=web"
-      - "traefik.http.routers.dashboard.middlewares=redirect-to-dashboard@docker"
-      - "traefik.http.middlewares.redirect-to-dashboard.redirectregex.regex=^http://traefik\\.local/?$"
-      - "traefik.http.middlewares.redirect-to-dashboard.redirectregex.replacement=http://traefik.local/dashboard/"
+      - "traefik.http.routers.dashboard-dev.rule=Host(`traefik.local`)"
+      - "traefik.http.routers.dashboard-dev.service=api@internal"
+      - "traefik.http.routers.dashboard-dev.entrypoints=web"
+      - "traefik.http.routers.dashboard-dev.middlewares=redirect-to-dashboard-dev@docker"
+      - "traefik.http.middlewares.redirect-to-dashboard-dev.redirectregex.regex=^http://traefik\\.local/?$"
+      - "traefik.http.middlewares.redirect-to-dashboard-dev.redirectregex.replacement=http://traefik.local/dashboard/"
 
     # -------------------------------------------------------------------------
     # Portas expostas
     # -------------------------------------------------------------------------
+    # Bind apenas em loopback: o dashboard roda sem autenticação
+    # (api.insecure=true) e não deve ficar acessível a outras máquinas da
+    # rede local. localhost, *.localhost e traefik.local seguem funcionando.
     ports:
-      - "80:80"       # HTTP — tráfego de entrada dos serviços
-      - "8080:8080"   # Dashboard direto (api.insecure=true)
+      - "127.0.0.1:80:80"       # HTTP — tráfego de entrada dos serviços
+      - "127.0.0.1:8080:8080"   # Dashboard direto (api.insecure=true)
 
     # -------------------------------------------------------------------------
     # Volumes

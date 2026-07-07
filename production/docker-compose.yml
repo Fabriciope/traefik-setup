@@ -17,10 +17,38 @@
 # =============================================================================
 
 services:
+  # ---------------------------------------------------------------------------
+  # Proxy do socket do Docker — o Traefik nunca toca /var/run/docker.sock
+  # diretamente. Este proxy libera apenas os endpoints read-only necessários
+  # ao provider docker (listar containers + eventos + versão); todo o resto,
+  # incluindo qualquer POST, é negado. Uma RCE no Traefik deixa de significar
+  # acesso root ao host via API do Docker.
+  # ---------------------------------------------------------------------------
+  socket-proxy:
+    image: tecnativa/docker-socket-proxy:v0.4.2
+    container_name: traefik_socket_proxy
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      - CONTAINERS=1   # GET /containers — único acréscimo aos defaults (events/ping/version)
+      - POST=0         # explícito: nenhuma operação de escrita
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - socket-proxy-net
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "3"
+
   traefik:
     image: traefik:v3.6
     container_name: traefik_proxy
     restart: unless-stopped
+    depends_on:
+      - socket-proxy
     security_opt:
       - no-new-privileges:true
 
@@ -34,6 +62,7 @@ services:
 
       # --- Providers ---
       - "--providers.docker=true"
+      - "--providers.docker.endpoint=tcp://socket-proxy:2375"   # via socket-proxy, nunca o socket direto
       - "--providers.docker.watch=true"
       - "--providers.docker.exposedbydefault=false"
       - "--providers.docker.network=proxy-network"
@@ -54,9 +83,10 @@ services:
       - "--certificatesresolvers.letsencrypt.acme.storage=/acme/acme.json"
       - "--certificatesresolvers.letsencrypt.acme.httpchallenge=true"
       - "--certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web"
-      # Descomente a linha abaixo para usar o servidor de staging do Let's Encrypt
-      # durante os testes (evita bater no rate limit de produção):
-      # - "--certificatesresolvers.letsencrypt.acme.caserver=https://acme-staging-v02.api.letsencrypt.org/directory"
+      # CA server controlado por variável de ambiente: o default é SEMPRE a CA
+      # de produção — esquecer a variável nunca quebra prod. Para testes, defina
+      # ACME_CASERVER no .env apontando para o staging (veja .env.example).
+      - "--certificatesresolvers.letsencrypt.acme.caserver=${ACME_CASERVER:-https://acme-v02.api.letsencrypt.org/directory}"
 
       # --- Segurança global TLS ---
       - "--entryPoints.websecure.http.tls=true"
@@ -67,6 +97,10 @@ services:
       - "--log.format=json"
       - "--accesslog=true"
       - "--accesslog.format=json"
+
+      # --- Telemetria desligada ---
+      - "--global.sendAnonymousUsage=false"
+      - "--global.checkNewVersion=false"
 
       # --- Health check interno ---
       - "--ping=true"
@@ -125,28 +159,46 @@ services:
     # Volumes
     # -------------------------------------------------------------------------
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro   # leitura do Docker
       - ./traefik/acme:/acme                           # certificados Let's Encrypt
       - ./traefik/auth:/auth:ro                        # arquivo de usuários do dashboard
       - ./traefik/config:/config:ro                    # configs dinâmicas (file provider)
 
     networks:
       - proxy-network
+      - socket-proxy-net
+
+    # -------------------------------------------------------------------------
+    # Rotação de logs — access log JSON cresce rápido; sem limite, enche o
+    # disco da VPS com o tempo (máx. ~50 MB por container com estes valores)
+    # -------------------------------------------------------------------------
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
 
     # -------------------------------------------------------------------------
     # Health check
     # -------------------------------------------------------------------------
     healthcheck:
-      test: ["CMD", "wget", "--spider", "http://127.0.0.1:8082/ping"]
+      # Binário nativo do Traefik — não depende de wget/curl da imagem base.
+      # Os flags de entrypoint são repetidos porque o subcomando healthcheck
+      # não herda a config do processo principal (sem eles, procuraria o ping
+      # na porta default 8080, que não existe aqui).
+      test: ["CMD", "traefik", "healthcheck", "--ping", "--entrypoints.ping.address=:8082", "--ping.entrypoint=ping"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 15s
 
 # =============================================================================
-# Rede externa compartilhada com os outros serviços (nginx, etc.)
-# Criar com: docker network create proxy-network
+# Redes
+#   proxy-network    → externa, compartilhada com os outros serviços
+#                      Criar com: docker network create proxy-network
+#   socket-proxy-net → interna (sem saída), só Traefik ↔ socket-proxy
 # =============================================================================
 networks:
   proxy-network:
     external: true
+  socket-proxy-net:
+    internal: true

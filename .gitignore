@@ -1,4 +1,5 @@
 production/traefik/acme/*
 production/traefik/auth/*
+production/backups/
 production/.env
 development/.env

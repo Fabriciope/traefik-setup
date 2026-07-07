@@ -53,25 +53,30 @@ cd development && docker compose restart
 - **Entrypoints**: `:80` (HTTP → HTTPS redirect), `:443` (HTTPS), `:8082` (internal ping)
 - **TLS**: Let's Encrypt via HTTP challenge; certificates in `production/traefik/acme/acme.json`
 - **Dashboard**: `${TRAEFIK_DASHBOARD_HOST}` (HTTPS only) behind Basic Auth + security headers + rate limit
-- **Env vars**: `ACME_EMAIL`, `TRAEFIK_DASHBOARD_HOST` — set in `production/.env`
+- **Docker provider**: Traefik never touches `/var/run/docker.sock` directly — it goes through a `socket-proxy` sidecar (`tecnativa/docker-socket-proxy`, read-only endpoints, `POST=0`) on the internal `socket-proxy-net` network
+- **Env vars**: `ACME_EMAIL`, `TRAEFIK_DASHBOARD_HOST` (required), `ACME_CASERVER` (optional, defaults to the Let's Encrypt production CA) — set in `production/.env`
+- **Logging**: JSON with rotation (`max-size: 10m`, `max-file: 5`)
+- **Backup**: `production/backup-acme.sh` copies `acme.json` (mode 600, 7-day weekday rotation) to `production/backups/`; meant to run from host cron
 
 ### Development (`development/`)
 
-- **Entrypoints**: `:80` (HTTP only, no TLS)
+- **Entrypoints**: `:80` (HTTP only, no TLS); ports bound to `127.0.0.1` only (unauthenticated dashboard must not be reachable from the LAN)
 - **Dashboard**: `http://localhost:8080/dashboard/` (direct, no auth) and `http://traefik.local/dashboard/` (requires `/etc/hosts` entry)
 - **Logs**: DEBUG level, plain text format
 - **No auth, no rate limit, no security headers**
+- Router/middleware names are suffixed `-dev` (e.g. `dashboard-dev`) to avoid global-name collisions with production labels
 
 ## Key files
 
 | File | Purpose |
 |---|---|
-| `traefik.sh` | Root script — runs docker compose in the right environment directory |
-| `production/docker-compose.yml` | Production Traefik config (TLS, auth, headers) |
-| `production/.env` | `ACME_EMAIL` and `TRAEFIK_DASHBOARD_HOST` — git-ignored |
+| `traefik.sh` | Root script — runs docker compose in the right environment directory; refuses `prod up` with missing/placeholder `.env` and warns if traefik image tags drift between environments |
+| `production/docker-compose.yml` | Production Traefik config (TLS, auth, headers, socket-proxy) |
+| `production/.env` | `ACME_EMAIL`, `TRAEFIK_DASHBOARD_HOST`, optional `ACME_CASERVER` — git-ignored |
 | `production/traefik/acme/acme.json` | Let's Encrypt certificate store — must be `chmod 600` |
 | `production/traefik/auth/dashboard_users` | htpasswd credentials (bcrypt, `-B` flag) — git-ignored |
-| `development/docker-compose.yml` | Development Traefik config (HTTP, no auth) |
+| `production/backup-acme.sh` | Backup of `acme.json` to `production/backups/` (git-ignored) — schedule via host cron |
+| `development/docker-compose.yml` | Development Traefik config (HTTP, no auth, loopback-only ports) |
 
 ## Exposing other services
 
@@ -83,11 +88,11 @@ labels:
   - "traefik.http.routers.<name>.rule=Host(`example.com`)"
   - "traefik.http.routers.<name>.entrypoints=websecure"
   - "traefik.http.routers.<name>.tls.certresolver=letsencrypt"
-  # optional: apply shared security headers
-  - "traefik.http.routers.<name>.middlewares=security-headers@docker"
 networks:
   - proxy-network
 ```
+
+There is no shared security-headers middleware: `dashboard-security-headers` belongs to the dashboard only. Docker-label middlewares resolve by global name, so each service must define its own uniquely-named middleware (copy the header directives from `production/docker-compose.yml`).
 
 ### Development labels
 
@@ -112,8 +117,8 @@ To use `http://traefik.local` (instead of `localhost:8080`), add to `/etc/hosts`
 
 ## Testing TLS without hitting rate limits (production)
 
-Uncomment the staging CA server line in `production/docker-compose.yml`:
+Set in `production/.env` (unset = production CA, always the safe default):
 ```
-- "--certificatesresolvers.letsencrypt.acme.caserver=https://acme-staging-v02.api.letsencrypt.org/directory"
+ACME_CASERVER=https://acme-staging-v02.api.letsencrypt.org/directory
 ```
 Delete `production/traefik/acme/acme.json` contents and restart when switching between staging and production.

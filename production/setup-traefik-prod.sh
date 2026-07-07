@@ -69,11 +69,13 @@ if ! command -v htpasswd &> /dev/null; then
 fi
 
 htpasswd -nBC 12 "$DASHBOARD_USER" > "$PROD_DIR/traefik/auth/dashboard_users"
+chmod 600 "$PROD_DIR/traefik/auth/dashboard_users"
 echo "   ✅ Arquivo de credenciais criado em $PROD_DIR/traefik/auth/dashboard_users"
 
 # 5. Criar .env a partir do exemplo (se não existir)
 if [ ! -f "$PROD_DIR/.env" ]; then
   cp "$PROD_DIR/.env.example" "$PROD_DIR/.env"
+  chmod 600 "$PROD_DIR/.env"
   echo ""
   echo "📝 Arquivo .env criado. Edite-o com seus valores:"
   echo "   nano $PROD_DIR/.env"

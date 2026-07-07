@@ -46,7 +46,8 @@ traefik/
 ├── production/         # VPS: TLS, HTTPS, Basic Auth, security headers
 │   ├── docker-compose.yml
 │   ├── .env.example
-│   └── setup-traefik-prod.sh
+│   ├── setup-traefik-prod.sh
+│   └── backup-acme.sh  # backup dos certificados (agendar no cron)
 └── development/        # local: HTTP, sem auth, logs de debug
     ├── docker-compose.yml
     ├── .env.example
@@ -172,8 +173,11 @@ nano production/.env
 |---|---|---|
 | `ACME_EMAIL` | E-mail para avisos do Let's Encrypt | `admin@example.com` |
 | `TRAEFIK_DASHBOARD_HOST` | Domínio do dashboard do Traefik | `traefik.example.com` |
+| `ACME_CASERVER` | (Opcional) CA do ACME — sem definir, usa a CA de produção do Let's Encrypt | CA de staging, para testes |
 
 Copie `production/.env.example` para `production/.env` e preencha. O `.env` é ignorado pelo git e **nunca** deve ser commitado.
+
+> O `./traefik.sh prod` se recusa a subir se o `.env` estiver ausente, vazio ou com os valores de exemplo — assim o erro aparece na hora, e não minutos depois na emissão do certificado.
 
 ### Expondo um serviço
 
@@ -186,8 +190,6 @@ services:
       - "traefik.http.routers.my-app.rule=Host(`app.example.com`)"
       - "traefik.http.routers.my-app.entrypoints=websecure"
       - "traefik.http.routers.my-app.tls.certresolver=letsencrypt"
-      # opcional: aplica os security headers compartilhados
-      - "traefik.http.routers.my-app.middlewares=security-headers@docker"
     networks:
       - proxy-network
 
@@ -197,13 +199,21 @@ networks:
 ```
 
 <details>
-<summary><b>Middlewares compartilhados disponíveis</b></summary>
+<summary><b>Security headers no meu serviço</b></summary>
 
-| Middleware | Efeito |
-|---|---|
-| `security-headers@docker` | HSTS, frame deny, nosniff, referrer-policy |
-| `dashboard-auth@docker` | Basic Auth (apenas dashboard) |
-| `dashboard-ratelimit@docker` | Rate limit: 10 req/s em média, burst 20 (apenas dashboard) |
+Os middlewares `dashboard-*` (auth, headers, rate limit) pertencem **apenas ao dashboard** — não os reutilize: middlewares definidos via labels do Docker são resolvidos por nome global, e compartilhar o mesmo nome entre projetos causa conflito.
+
+Para aplicar security headers no seu serviço, defina um middleware **com nome próprio** nos labels dele, copiando as diretivas de `production/docker-compose.yml`:
+
+```yaml
+labels:
+  - "traefik.http.routers.my-app.middlewares=my-app-security-headers@docker"
+  - "traefik.http.middlewares.my-app-security-headers.headers.stsSeconds=31536000"
+  - "traefik.http.middlewares.my-app-security-headers.headers.stsIncludeSubdomains=true"
+  - "traefik.http.middlewares.my-app-security-headers.headers.contentTypeNosniff=true"
+  - "traefik.http.middlewares.my-app-security-headers.headers.frameDeny=true"
+  - "traefik.http.middlewares.my-app-security-headers.headers.referrerPolicy=strict-origin-when-cross-origin"
+```
 </details>
 
 <details>
@@ -211,13 +221,26 @@ networks:
 
 O Let's Encrypt tem um [limite](https://letsencrypt.org/docs/rate-limits/) de 5 certificados duplicados por semana. Use a CA de staging durante os testes:
 
-1. Descomente a linha de staging em `production/docker-compose.yml`:
-   ```
-   - "--certificatesresolvers.letsencrypt.acme.caserver=https://acme-staging-v02.api.letsencrypt.org/directory"
+1. Descomente `ACME_CASERVER` no `production/.env` (sem a variável, o default é **sempre** a CA de produção — não há como esquecer configuração de teste no compose):
+   ```bash
+   ACME_CASERVER=https://acme-staging-v02.api.letsencrypt.org/directory
    ```
 2. Esvazie `production/traefik/acme/acme.json` e reinicie
 3. Verifique que o certificado foi emitido (será não confiável — esperado em staging)
-4. Comente a linha de novo, esvazie o `acme.json` outra vez e reinicie para obter o certificado real
+4. Comente a variável de novo, esvazie o `acme.json` outra vez e reinicie para obter o certificado real
+</details>
+
+<details>
+<summary><b>Backup dos certificados (acme.json)</b></summary>
+
+O `acme.json` guarda os certificados e as chaves privadas. Perdê-lo força a reemissão de tudo — e pode esbarrar no rate limit. O script `production/backup-acme.sh` mantém 7 cópias rotativas (uma por dia da semana) em `production/backups/`, com modo `600`.
+
+Agende no cron do servidor:
+
+```bash
+# todo dia às 3h
+0 3 * * * /bin/bash /caminho/para/production/backup-acme.sh
+```
 </details>
 
 <details>
@@ -277,11 +300,13 @@ chmod 600 production/traefik/acme/acme.json
 <details>
 <summary><b>Expandir</b></summary>
 
-- O socket do Docker é montado **somente leitura** (`/var/run/docker.sock:ro`)
-- `no-new-privileges: true` está definido no container
+- O Traefik **não acessa o socket do Docker diretamente**: um sidecar `socket-proxy` (tecnativa/docker-socket-proxy) numa rede interna libera apenas os endpoints read-only necessários (listar containers, eventos, versão) e nega qualquer escrita (`POST=0`). Uma eventual RCE no Traefik não vira acesso root ao host via API do Docker.
+- `no-new-privileges: true` está definido em todos os containers (inclusive em dev)
 - O dashboard não é acessível por HTTP puro nem exposto na porta 8080
-- As credenciais do dashboard usam bcrypt (fator de custo 12) via `htpasswd -B`
+- As credenciais do dashboard usam bcrypt (fator de custo 12) via `htpasswd -B`, arquivo com modo `600`
 - A porta interna de ping (8082) não fica vinculada a nenhuma interface pública
+- Logs com rotação (`max-size: 10m`, `max-file: 5`) — o access log não enche o disco da VPS
+- Em **desenvolvimento**, as portas 80/8080 ficam vinculadas a `127.0.0.1` — o dashboard sem autenticação não fica visível para outras máquinas da rede local
 </details>
 
 ---
