@@ -1,15 +1,16 @@
 # =============================================================================
 # Traefik v3 - Configuração de DESENVOLVIMENTO LOCAL
 # =============================================================================
-# Sem TLS, sem autenticação, sem rate limit — otimizado para dev local.
+# HTTP + HTTPS (certificado local via mkcert), sem autenticação, sem rate
+# limit — otimizado para dev local.
 #
 # Pré-requisito:
-#   docker network create proxy-network   (ou: bash setup-traefik-dev.sh)
+#   bash setup-traefik-dev.sh   (cria a rede proxy-network e o certificado TLS)
 #
 # Dashboard acessível de duas formas:
-#   - http://localhost:8080/dashboard/    (sempre disponível, sem /etc/hosts)
-#   - http://traefik.local/dashboard/    (requer entrada no /etc/hosts:
-#                                          127.0.0.1 traefik.local)
+#   - http(s)://localhost:8080/dashboard/  (sempre disponível, sem /etc/hosts)
+#   - http(s)://traefik.local/dashboard/   (requer entrada no /etc/hosts:
+#                                            127.0.0.1 traefik.local)
 # =============================================================================
 
 services:
@@ -33,16 +34,19 @@ services:
       - "--providers.docker.watch=true"
       - "--providers.docker.exposedbydefault=false"
       - "--providers.docker.network=proxy-network"
+      - "--providers.file.directory=/etc/traefik/dynamic"  # certificado TLS local (mkcert)
+      - "--providers.file.watch=true"
 
       # --- Entrypoints ---
-      - "--entryPoints.web.address=:80"    # HTTP apenas (sem HTTPS em dev)
+      - "--entryPoints.web.address=:80"          # HTTP
+      - "--entryPoints.websecure.address=:443"   # HTTPS (certificado local via mkcert)
 
       # --- Logs ---
       - "--log.level=DEBUG"                # DEBUG | INFO | WARN | ERROR
       - "--accesslog=true"
 
     # -------------------------------------------------------------------------
-    # Labels - Dashboard acessível via traefik.local (porta 80)
+    # Labels - Dashboard acessível via traefik.local (portas 80 e 443)
     # Requer no /etc/hosts: 127.0.0.1 traefik.local
     # -------------------------------------------------------------------------
     labels:
@@ -55,8 +59,18 @@ services:
       - "traefik.http.routers.dashboard-dev.service=api@internal"
       - "traefik.http.routers.dashboard-dev.entrypoints=web"
       - "traefik.http.routers.dashboard-dev.middlewares=redirect-to-dashboard-dev@docker"
-      - "traefik.http.middlewares.redirect-to-dashboard-dev.redirectregex.regex=^http://traefik\\.local/?$"
-      - "traefik.http.middlewares.redirect-to-dashboard-dev.redirectregex.replacement=http://traefik.local/dashboard/"
+
+      - "traefik.http.routers.dashboard-dev-secure.rule=Host(`traefik.local`)"
+      - "traefik.http.routers.dashboard-dev-secure.service=api@internal"
+      - "traefik.http.routers.dashboard-dev-secure.entrypoints=websecure"
+      - "traefik.http.routers.dashboard-dev-secure.tls=true"
+      - "traefik.http.routers.dashboard-dev-secure.middlewares=redirect-to-dashboard-dev@docker"
+
+      # Regex com grupo de captura do esquema (http/https) — mesmo middleware
+      # serve os dois routers acima. "$" precisa ser escapado como "$$" para o
+      # docker compose não tentar interpolar a referência como variável.
+      - "traefik.http.middlewares.redirect-to-dashboard-dev.redirectregex.regex=^(https?)://traefik\\.local/?$$"
+      - "traefik.http.middlewares.redirect-to-dashboard-dev.redirectregex.replacement=$$1://traefik.local/dashboard/"
 
     # -------------------------------------------------------------------------
     # Portas expostas
@@ -66,6 +80,7 @@ services:
     # rede local. localhost, *.localhost e traefik.local seguem funcionando.
     ports:
       - "127.0.0.1:80:80"       # HTTP — tráfego de entrada dos serviços
+      - "127.0.0.1:443:443"     # HTTPS — certificado local (mkcert)
       - "127.0.0.1:8080:8080"   # Dashboard direto (api.insecure=true)
 
     # -------------------------------------------------------------------------
@@ -73,6 +88,8 @@ services:
     # -------------------------------------------------------------------------
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./traefik/certs:/etc/traefik/certs:ro       # certificado TLS gerado pelo mkcert
+      - ./traefik/dynamic:/etc/traefik/dynamic:ro   # config dinâmica (aponta pro certificado)
 
     networks:
       - proxy-network

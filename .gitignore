@@ -3,3 +3,4 @@ production/traefik/auth/*
 production/backups/
 production/.env
 development/.env
+development/traefik/certs/*

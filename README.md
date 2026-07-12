@@ -6,7 +6,7 @@ Um setup de [Traefik v3](https://traefik.io/) com Docker Compose que serve como 
 
 O repositório traz dois ambientes prontos:
 
-- 🚀 **`development/`** — local, HTTP puro, sem senha, logs em modo debug.
+- 🚀 **`development/`** — local, HTTP + HTTPS (certificado confiável via `mkcert`), sem senha, logs em modo debug.
 - 🔒 **`production/`** — VPS com domínio, TLS automático (Let's Encrypt), redirecionamento HTTP→HTTPS e dashboard protegido.
 
 ```mermaid
@@ -29,8 +29,8 @@ Todos os serviços conversam pela mesma rede Docker (`proxy-network`). Basta o c
 | | 🚀 Development | 🔒 Production |
 |---|---|---|
 | **Quando usar** | Desenvolvimento local | VPS / servidor público |
-| **Protocolo** | HTTP (`:80`) | HTTPS (`:443`), com redirect de `:80` |
-| **TLS / Certificado** | Nenhum | Let's Encrypt automático |
+| **Protocolo** | HTTP (`:80`) e HTTPS (`:443`) | HTTPS (`:443`), com redirect de `:80` |
+| **TLS / Certificado** | Local, confiável, via `mkcert` | Let's Encrypt automático |
 | **Autenticação** | Nenhuma | Basic Auth no dashboard |
 | **Dashboard** | `localhost:8080` (aberto) | Domínio próprio, atrás de auth |
 | **Domínio** | `*.localhost` (sem config) | Domínio real apontando pra VPS |
@@ -48,10 +48,13 @@ traefik/
 │   ├── .env.example
 │   ├── setup-traefik-prod.sh
 │   └── backup-acme.sh  # backup dos certificados (agendar no cron)
-└── development/        # local: HTTP, sem auth, logs de debug
+└── development/        # local: HTTP+HTTPS, sem auth, logs de debug
     ├── docker-compose.yml
     ├── .env.example
-    └── setup-traefik-dev.sh
+    ├── setup-traefik-dev.sh
+    └── traefik/
+        ├── certs/       # certificado mkcert (git-ignored, gerado no setup)
+        └── dynamic/     # config dinâmica apontando pro certificado
 ```
 
 ---
@@ -76,19 +79,19 @@ Atalho para rodar `docker compose` no ambiente certo, de qualquer lugar do repos
 
 ## 🚀 Desenvolvimento
 
-Feito para uso local — **sem domínio, sem certificado, sem senha**. Comece por aqui.
+Feito para uso local — **sem domínio real, sem senha**, mas com HTTPS de verdade via certificado local (`mkcert`). Comece por aqui.
 
 ### Quick start
 
 ```bash
-# 1. Setup único (cria a rede Docker proxy-network)
+# 1. Setup único (cria a rede proxy-network e o certificado TLS local — pode pedir sua senha do sudo)
 bash development/setup-traefik-dev.sh
 
 # 2. Sobe o Traefik
 ./traefik.sh dev
 ```
 
-Dashboard disponível em **`http://localhost:8080/dashboard/`** — funciona de imediato, sem nenhuma configuração.
+Dashboard disponível em **`http://localhost:8080/dashboard/`** — funciona de imediato, sem nenhuma configuração. Via `traefik.local` (veja abaixo), também dá pra acessar em `https://traefik.local/dashboard/`.
 
 ### Expondo um serviço
 
@@ -111,6 +114,26 @@ networks:
 ```
 
 Pronto — acesse `http://myapp.localhost`. Domínios `.localhost` resolvem para `127.0.0.1` nativamente na maioria dos navegadores e sistemas, sem precisar editar `/etc/hosts` (mas é recomendado fazer essa configuração em `/etc/hosts`).
+
+### Habilitando HTTPS no serviço
+
+O Traefik de dev carrega um certificado gerado pelo `mkcert` (via `setup-traefik-dev.sh`) que cobre `*.localhost`, `*.local`, `*.dev`, `traefik.local`, `localhost` e `127.0.0.1` — como é confiável pelo navegador/SO da sua máquina, **não há avisos de certificado inválido**. Para o serviço aceitar HTTPS, basta adicionar um segundo router apontando pro entrypoint `websecure` com `tls=true` — **sem certresolver**, o certificado é resolvido automaticamente por SNI:
+
+```yaml
+labels:
+  - "traefik.enable=true"
+  # router HTTP (como já existia)
+  - "traefik.http.routers.my-app.rule=Host(`myapp.localhost`)"
+  - "traefik.http.routers.my-app.entrypoints=web"
+  # router HTTPS — mesmo host, outro entrypoint
+  - "traefik.http.routers.my-app-secure.rule=Host(`myapp.localhost`)"
+  - "traefik.http.routers.my-app-secure.entrypoints=websecure"
+  - "traefik.http.routers.my-app-secure.tls=true"
+```
+
+Pronto — acesse `https://myapp.localhost` sem warnings. Se `development/traefik/certs/` estiver vazio (setup nunca rodado), o `websecure` cai no certificado padrão (não confiável) do próprio Traefik — o HTTP em `:80` continua funcionando normalmente.
+
+> Usando `myapp.local` ou `myapp.dev` em vez de `.localhost`? O certificado cobre os dois, mas eles **não resolvem sozinhos para `127.0.0.1`** — adicione a entrada no `/etc/hosts` (`.local` também pode conflitar com mDNS/Bonjour em alguns sistemas). E de quebra: domínios `.dev` são forçados a HTTPS pelo navegador via HSTS preload — HTTP puro simplesmente não funciona nesse TLD, então o `websecure` já é obrigatório ali.
 
 <details>
 <summary><b>Meu container não escuta na porta 80</b></summary>
@@ -138,7 +161,7 @@ Como alternativa ao `localhost:8080`, adicione uma entrada no `/etc/hosts`:
 echo "127.0.0.1 traefik.local" | sudo tee -a /etc/hosts
 ```
 
-Depois acesse `http://traefik.local/dashboard/`.
+Depois acesse `http://traefik.local/dashboard/` ou `https://traefik.local/dashboard/` (certificado confiável via `mkcert`, sem avisos).
 </details>
 
 ---
@@ -313,6 +336,15 @@ curl -s http://127.0.0.1:8082/ping
 </details>
 
 <details>
+<summary><b>HTTPS em dev mostra aviso de certificado inválido</b></summary>
+
+- Rode `bash development/setup-traefik-dev.sh` — ele instala o `mkcert`, registra a CA local nos navegadores/SO (`mkcert -install`) e gera o certificado
+- Se o certificado já existia antes de instalar a CA, apague `development/traefik/certs/` e rode o setup de novo para regerar
+- Confirme que o certificado cobre o host acessado: `openssl s_client -connect 127.0.0.1:443 -servername myapp.localhost </dev/null 2>/dev/null | openssl x509 -noout -ext subjectAltName`
+- Veja se há erro de TLS nos logs: `./traefik.sh dev logs traefik | grep -i tls`
+</details>
+
+<details>
 <summary><b>Erro de permissão no acme.json (produção)</b></summary>
 
 O arquivo precisa estar com modo `600`:
@@ -335,7 +367,7 @@ chmod 600 production/traefik/acme/acme.json
 - As credenciais do dashboard usam bcrypt (fator de custo 12) via `htpasswd -B`, arquivo com modo `600`
 - A porta interna de ping (8082) não fica vinculada a nenhuma interface pública
 - Logs com rotação (`max-size: 10m`, `max-file: 5`) — o access log não enche o disco da VPS
-- Em **desenvolvimento**, as portas 80/8080 ficam vinculadas a `127.0.0.1` — o dashboard sem autenticação não fica visível para outras máquinas da rede local
+- Em **desenvolvimento**, as portas 80/443/8080 ficam vinculadas a `127.0.0.1` — o dashboard sem autenticação não fica visível para outras máquinas da rede local. O certificado HTTPS de dev (`mkcert`) é só local: a CA fica confiável apenas nesta máquina, não expõe nada à rede
 </details>
 
 ---

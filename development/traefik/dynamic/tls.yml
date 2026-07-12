@@ -1,0 +1,17 @@
+# =============================================================================
+# Configuração dinâmica de TLS — desenvolvimento
+# =============================================================================
+# Certificado gerado pelo mkcert (bash development/setup-traefik-dev.sh),
+# cobrindo *.localhost, *.local, *.dev, traefik.local, localhost e 127.0.0.1/::1.
+# Como é o único certificado carregado, ele responde por SNI a qualquer
+# desses hosts automaticamente — nenhum service precisa de certresolver.
+# =============================================================================
+tls:
+  certificates:
+    - certFile: /etc/traefik/certs/local-cert.pem
+      keyFile: /etc/traefik/certs/local-key.pem
+  stores:
+    default:
+      defaultCertificate:
+        certFile: /etc/traefik/certs/local-cert.pem
+        keyFile: /etc/traefik/certs/local-key.pem
