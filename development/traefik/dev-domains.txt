@@ -1,0 +1,19 @@
+# =============================================================================
+# Domínios extras cobertos pelo certificado local (um por linha)
+# =============================================================================
+# *.localhost, *.local, traefik.local, localhost e 127.0.0.1/::1 já são
+# cobertos automaticamente por setup-traefik-dev.sh — não precisa listar aqui.
+#
+# IMPORTANTE sobre .dev: NÃO dá pra usar "*.dev" como wildcard. ".dev" é um
+# TLD público de verdade (administrado pelo Google, na Public Suffix List) —
+# navegadores recusam certificados wildcard emitidos direto sobre um TLD
+# público, mesmo com CA confiável localmente (um "*.dev" poderia, em teoria,
+# autenticar o domínio .dev de qualquer pessoa). O erro típico no Chrome é
+# net::ERR_CERT_COMMON_NAME_INVALID. openssl/curl não aplicam essa regra,
+# então testes de linha de comando passam mesmo quando o navegador recusa.
+#
+# A solução é listar cada domínio .dev explicitamente (não como wildcard).
+# Depois de editar este arquivo, rode de novo:
+#   bash development/setup-traefik-dev.sh
+#
+phpdocquest.dev

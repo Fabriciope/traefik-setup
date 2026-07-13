@@ -48,23 +48,34 @@ if ! command -v mkcert &> /dev/null; then
   { echo "   ❌ Instale manualmente: https://github.com/FiloSottile/mkcert#installation"; exit 1; }
 fi
 
-# 3. Gerar certificado TLS local (cobrindo *.localhost, *.local, *.dev, traefik.local, 127.0.0.1)
+# 3. Montar a lista de domínios do certificado
+#    *.dev NÃO entra como wildcard: é um TLD público (Public Suffix List) e
+#    navegadores recusam wildcard direto sobre TLD público, mesmo com CA
+#    local confiável. Domínios .dev precisam vir explícitos — veja
+#    traefik/dev-domains.txt.
+DOMAINS=("*.localhost" "*.local" "traefik.local" "localhost" "127.0.0.1" "::1")
+
+DOMAINS_FILE="$SCRIPT_DIR/traefik/dev-domains.txt"
+if [ -f "$DOMAINS_FILE" ]; then
+  while IFS= read -r line; do
+    line="${line%%#*}"                      # remove comentários
+    line="$(echo "$line" | tr -d '[:space:]')"  # trim
+    [ -n "$line" ] && DOMAINS+=("$line")
+  done < "$DOMAINS_FILE"
+fi
+
+# 4. Gerar certificado TLS local (sempre regenera — barato e idempotente;
+#    garante que domínios novos adicionados em dev-domains.txt entrem)
 mkdir -p "$CERTS_DIR"
 
-if [ -f "$CERTS_DIR/local-cert.pem" ] && [ -f "$CERTS_DIR/local-key.pem" ]; then
-  echo ""
-  echo "   ✅ Certificado local já existe em $CERTS_DIR, mantendo."
-else
-  echo ""
-  echo "🔐 Instalando a CA local do mkcert (pode pedir sua senha)..."
-  mkcert -install
+echo ""
+echo "🔐 Instalando a CA local do mkcert (pode pedir sua senha)..."
+mkcert -install
 
-  echo "🔐 Gerando certificado para *.localhost, *.local, *.dev, traefik.local, localhost, 127.0.0.1, ::1..."
-  mkcert -cert-file "$CERTS_DIR/local-cert.pem" -key-file "$CERTS_DIR/local-key.pem" \
-    "*.localhost" "*.local" "*.dev" "traefik.local" "localhost" "127.0.0.1" "::1"
+echo "🔐 Gerando certificado para: ${DOMAINS[*]}"
+mkcert -cert-file "$CERTS_DIR/local-cert.pem" -key-file "$CERTS_DIR/local-key.pem" "${DOMAINS[@]}"
 
-  echo "   ✅ Certificado criado em $CERTS_DIR"
-fi
+echo "   ✅ Certificado criado em $CERTS_DIR"
 
 echo ""
 echo "✅ Setup concluído! Próximos passos:"

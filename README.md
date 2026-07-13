@@ -53,8 +53,9 @@ traefik/
     ├── .env.example
     ├── setup-traefik-dev.sh
     └── traefik/
-        ├── certs/       # certificado mkcert (git-ignored, gerado no setup)
-        └── dynamic/     # config dinâmica apontando pro certificado
+        ├── certs/            # certificado mkcert (git-ignored, gerado no setup)
+        ├── dynamic/          # config dinâmica apontando pro certificado
+        └── dev-domains.txt   # domínios .dev extras cobertos pelo certificado
 ```
 
 ---
@@ -117,7 +118,7 @@ Pronto — acesse `http://myapp.localhost`. Domínios `.localhost` resolvem para
 
 ### Habilitando HTTPS no serviço
 
-O Traefik de dev carrega um certificado gerado pelo `mkcert` (via `setup-traefik-dev.sh`) que cobre `*.localhost`, `*.local`, `*.dev`, `traefik.local`, `localhost` e `127.0.0.1` — como é confiável pelo navegador/SO da sua máquina, **não há avisos de certificado inválido**. Para o serviço aceitar HTTPS, basta adicionar um segundo router apontando pro entrypoint `websecure` com `tls=true` — **sem certresolver**, o certificado é resolvido automaticamente por SNI:
+O Traefik de dev carrega um certificado gerado pelo `mkcert` (via `setup-traefik-dev.sh`) que cobre `*.localhost`, `*.local`, `traefik.local`, `localhost`, `127.0.0.1` e qualquer domínio `.dev` listado em `development/traefik/dev-domains.txt` — como é confiável pelo navegador/SO da sua máquina, **não há avisos de certificado inválido**. Para o serviço aceitar HTTPS, basta adicionar um segundo router apontando pro entrypoint `websecure` com `tls=true` — **sem certresolver**, o certificado é resolvido automaticamente por SNI:
 
 ```yaml
 labels:
@@ -133,7 +134,27 @@ labels:
 
 Pronto — acesse `https://myapp.localhost` sem warnings. Se `development/traefik/certs/` estiver vazio (setup nunca rodado), o `websecure` cai no certificado padrão (não confiável) do próprio Traefik — o HTTP em `:80` continua funcionando normalmente.
 
-> Usando `myapp.local` ou `myapp.dev` em vez de `.localhost`? O certificado cobre os dois, mas eles **não resolvem sozinhos para `127.0.0.1`** — adicione a entrada no `/etc/hosts` (`.local` também pode conflitar com mDNS/Bonjour em alguns sistemas). E de quebra: domínios `.dev` são forçados a HTTPS pelo navegador via HSTS preload — HTTP puro simplesmente não funciona nesse TLD, então o `websecure` já é obrigatório ali.
+> Usando `myapp.local` em vez de `.localhost`? O certificado cobre esse wildcard também, mas ele **não resolve sozinho para `127.0.0.1`** — adicione a entrada no `/etc/hosts` (`.local` também pode conflitar com mDNS/Bonjour em alguns sistemas).
+
+<details>
+<summary><b>Usando domínio <code>.dev</code> (ex.: <code>myapp.dev</code>)?</b></summary>
+
+`.dev` **não pode usar wildcard**. Diferente de `.localhost`/`.local`, `.dev` é um TLD público de verdade (administrado pelo Google) e está na *Public Suffix List* — o Chrome recusa qualquer certificado wildcard emitido direto sobre um TLD público, mesmo com CA confiável localmente (`*.dev` poderia, em teoria, autenticar o domínio `.dev` de qualquer pessoa). O erro típico é `net::ERR_CERT_COMMON_NAME_INVALID` — e `curl`/`openssl` **não reproduzem** esse erro, porque só o navegador aplica essa regra.
+
+A solução é listar cada domínio `.dev` explicitamente:
+
+1. Adicione o domínio (uma linha, sem wildcard) em `development/traefik/dev-domains.txt`:
+   ```
+   myapp.dev
+   ```
+2. Rode `bash development/setup-traefik-dev.sh` de novo pra regerar o certificado
+3. Garanta a entrada no `/etc/hosts` (domínios `.dev` também não resolvem sozinhos pra `127.0.0.1`):
+   ```bash
+   echo "127.0.0.1 myapp.dev" | sudo tee -a /etc/hosts
+   ```
+
+De quebra: `.dev` é HSTS-preloaded no navegador inteiro — HTTP puro simplesmente não funciona nesse TLD, então o router `websecure`/`tls=true` já é obrigatório ali (não é opcional como em `.localhost`).
+</details>
 
 <details>
 <summary><b>Meu container não escuta na porta 80</b></summary>
@@ -339,7 +360,7 @@ curl -s http://127.0.0.1:8082/ping
 <summary><b>HTTPS em dev mostra aviso de certificado inválido</b></summary>
 
 - Rode `bash development/setup-traefik-dev.sh` — ele instala o `mkcert`, registra a CA local nos navegadores/SO (`mkcert -install`) e gera o certificado
-- Se o certificado já existia antes de instalar a CA, apague `development/traefik/certs/` e rode o setup de novo para regerar
+- **Domínio `.dev`?** É esperado dar `net::ERR_CERT_COMMON_NAME_INVALID` até você listar o domínio explicitamente em `development/traefik/dev-domains.txt` e rodar o setup de novo — veja "Usando domínio `.dev`" na seção de Desenvolvimento acima. `curl`/`openssl` não reproduzem esse erro, só o navegador
 - Confirme que o certificado cobre o host acessado: `openssl s_client -connect 127.0.0.1:443 -servername myapp.localhost </dev/null 2>/dev/null | openssl x509 -noout -ext subjectAltName`
 - Veja se há erro de TLS nos logs: `./traefik.sh dev logs traefik | grep -i tls`
 </details>
